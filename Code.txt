@@ -1,0 +1,2380 @@
+/*Feature1.	
+Add a new course. Input includes course name, program id, number of credits, grading format, whether the course is required, room type, number of sections. 
+The feature checks if a course with the same name exists in the program. If so, update the existing course with the values of the input parameters. 
+Otherwise, insert a new course and generate a new course id. Please print out the new course id.*/
+
+
+
+set serveroutput on;
+create or replace procedure new_course(c_id in course.course_id%type, p_id in course.program_id%type, c_name in course.course_name%type, 
+c_credits in course.credits%type, c_gradef in course.grade_format%type, c_num in course.num_secs%type, c_roe in 
+course.req_or_elec%type, c_room in course.room_type%type) 
+is 
+v_count integer;
+v_id integer;
+begin
+select count(*) into v_count from course c where c.course_name = c_name;
+if v_count = 1 then
+select course_id into v_id from course c where c.course_name = c_name;
+update course set credits = c_credits, grade_format = c_gradef, num_secs = c_num, req_or_elec = c_roe where course_name = c_name;
+dbms_output.put_line('Course already exits');
+else
+insert into course values (c_id, p_id, c_name, c_credits, c_gradef, c_num, c_roe, c_room);
+dbms_output.put_line(c_id);
+end if;
+EXCEPTION
+when no_data_found then
+dbms_output.put_line('no data found');
+end;
+/
+exec new_course(221, 22, 'Artificial Intelligence', 3, 'P/F', 2, 0,'regular');
+/
+exec new_course(226,22,'HEALTHIT',3,'P/F',2,0,'regular')
+
+
+/*Feature2.	
+Add a new instructor. Input includes instructor name, department id, and instructor type (full time or part time). 
+Please check if an instructor with the same name exists at the same department with same instructor type. 
+If so print an error message. Otherwise insert the instructor and print out the generated instructor id.*/
+
+set serveroutput on;
+create or replace procedure new_instructors (v_insid in instructors.instruc_id%type, 
+v_dept in instructors.dept_id%type, v_insname in instructors.instruc_name%type, 
+v_job in instructors.job_type%type)
+is
+v_count integer;
+v_inid integer;
+begin
+select count(*) into v_count from instructors where instruc_name = v_insname;
+if v_count = 1 then
+select instruc_id into v_inid from instructors where instruc_name = v_insname;
+dbms_output.put_line('instructor name already exist');
+else
+insert into instructors values (v_insid, v_dept, v_insname, v_job);
+dbms_output.put_line(v_insid);
+end if;
+exception
+when no_data_found then
+dbms_output.put_line('no data found');
+end;
+/
+exec new_instructors(1004,1,'Chen','Full-time');
+/
+exec new_instructors(2006, 2, 'Dr. John', 'Part-Time');
+
+--Feature 3
+
+SET SERVEROUTPUT ON;
+create or replace procedure enter_teaching_preferences(ins_id in instructors.instruc_id%type, yr in teaching_preferences.year_spe_ins%type, sem in teaching_preferences.sems_spec_ins%type, w_courses in willing_Courses, w_sections in willing_sections, Cant_days in String) IS
+c_id course.course_id%type;
+course_lim number;
+current_num_courses number;
+c_name course.course_name%type;
+n number;
+cant_d string(30);
+v_instruc number;
+
+BEGIN
+select count(*) into v_instruc from instructors where instruc_id = ins_id;     ---- find whether instruc id is valid
+if v_instruc > 0 then
+n := REGEXP_COUNT (Cant_days, ',', 1) + 1; --- one comma means more than day
+select COURSE_LOAD_MAX_LIMIT into course_lim from course_load where instruc_id = ins_id; --- course limit of professsor for that sem and year
+select count(*) into current_num_courses from teaching_preferences where instruc_id = ins_id group by instruc_id;  -- getting num of courses currently teaching
+if (current_num_courses + w_courses.count) <= course_lim and n <= 2 then -- second and third check
+ for i in 1..w_courses.count loop
+  c_name := w_courses(i);
+  select course_ID into c_id from course where course_name = c_name;
+  insert into teaching_preferences values(ins_id, c_id, w_sections(i), sem, yr, cant_days);
+ end loop;
+else
+ dbms_output.put_line('Error: Course limit exceeded or Blackout days more than 2'); --- proper error msg
+end if;
+else
+ dbms_output.put_line('Invalid Instructor ID');
+end if;
+end enter_teaching_preferences;
+/
+
+exec enter_teaching_preferences(1001, 2019, 'Fall', willing_Courses('HCI', 'Data Mining'), willing_sections(1,2), '2, 4'); ---- will enter and make limit to 3
+exec enter_teaching_preferences(1001, 2019, 'Fall', willing_Courses('Information Retrieval'), willing_sections(1), '2, 4, 5'); --- error saying bd more
+exec enter_teaching_preferences(1001, 2019, 'Fall', willing_Courses('Information Retrieval'), willing_sections(1), '2, 4'); ---- error saying course load more
+exec enter_teaching_preferences(1041, 2019, 'Fall', willing_Courses('Information Retrieval'), willing_sections(1), '2, 4');  ---- invalid i_id
+
+
+delete from teaching_preferences where instruc_id = 1001 and course_id = 125; ---- ir
+delete from teaching_preferences where instruc_id = 1001 and course_id = 331; ---dm
+delete from teaching_preferences where instruc_id = 1001 and course_id = 126; ----hci
+
+
+
+/* Feature 4.
+Allow a student to search for all courses offered in a given year, semester, and program. The input includes year, semester, program id.
+The procedure prints out for each scheduled course section the name of the course, number of credits, grading format, schedule id, section id,
+name of instructor, name of classroom, days of class, start and end time of each class, and whether the class is open or full.
+Please order the results by course id and section number. Please also check whether input program id is valid.*/
+
+SET SERVEROUTPUT ON;
+create or replace procedure show_courses(yr in schedule.year_schedule%type, sem in schedule.schedule_sem%type, p_id in course.program_id%type) IS
+
+c_id course.course_id%type;
+cred course.credits%type;
+grading course.grade_format%type;
+sch_id schedule.schedule_id%type;
+ins_id instructors.instruc_id%type;
+s_id section.sec_id%type;
+cr_id class_room.class_room_id%type;
+tb_id time_block.time_block_id%type;
+s_time time_block.start_time%type;
+e_time time_block.start_time%type;
+t_day time_block.time_day%type;
+class_day varchar(20);
+class_status char(20);
+sec_stat section.status%type;
+nos course.num_secs%type;
+rname class_room.room_name%type;
+p_valid number;
+
+Cursor c1 is select course_id, credits, grade_format, num_secs from course where program_id = p_id order by course_id;  ---- selecting all courses of program
+Cursor c2 is select schedule_id, instruc_id, sec_id, class_room_id, time_block_id from schedule
+where course_ID = c_id and year_schedule = yr and schedule_sem = sem order by sec_id;  ---- selecting all schedules for year and semester
+
+BEGIN
+select count(*) into p_valid from program where program_id = p_id;  --- program id exists
+if p_valid = 0 then
+ dbms_output.put_line('Invalid Program ID');
+else
+class_status := 'open';   ----- initialise var to open at beginning
+open c1;
+loop
+  fetch c1 into c_id, cred, grading, nos;  ---- fetch all courses into variables
+  exit when c1%NOTFOUND;
+  open c2;
+  loop
+  fetch c2 into sch_id, ins_id, s_id, cr_id, tb_id;   ---- fetch all schedules into varibales
+  exit when c2%NOTFOUND;
+  select room_name into rname from class_room where class_room_id = cr_id;   ---- select all room with room id in the existing schedules
+  select start_time, (start_time + time_len), time_day into s_time, e_time, t_day from time_block where time_block_id = tb_id;   ---- select all time_blocks with tbid in existing schedule
+  if t_day = 1 then       ------ assigning day accoding to time_day
+   class_day := 'Monday';
+  elsif t_day = 2 then
+   class_day := 'Tuesday';
+  elsif t_day = 3 then
+   class_day := 'Wednesday';
+  elsif t_day = 4 then
+   class_day := 'Thursday';
+  elsif t_day = 5 then
+   class_day := 'Friday';
+   else
+   class_day :='Not available';
+  end if;
+  select status into sec_stat from section where sec_ID = s_id;  --- getting status of section
+  if sec_stat = 0 then
+   class_status := 'full';     ---- assigning class status based on section status
+  end if;
+  dbms_output.put_line('Course id: ' || c_id || ' Credits: ' || cred ||' Grading format: ' || grading ||' schedule id: '|| sch_id ||' instructor id: '|| ins_id ||
+  ' section id: '|| s_id || ' Class room: '|| rname || ' Class days: '|| class_day ||' Start time: '|| s_time ||' End time: '|| e_time || ' Class status: ' || class_status);
+END LOOP;
+close c2;
+END LOOP;
+close c1;
+end if;
+end show_courses;
+/
+
+exec show_courses(2019,'Fall',12);
+exec show_courses(2019,'Fall',22);
+exec show_courses(2019,'Spring',12);
+exec show_courses(2019,'Fall',122345);
+
+--Feature 5
+
+create or replace procedure num_courses_assign (year_input in number,sem_input in varchar)
+is
+cursor z is select instruc_id,count(course_id) as cnt_cour  from schedule
+where year_schedule=year_input and schedule_sem=sem_input group by instruc_id;
+counter int;
+instructorid int;
+begin
+for rec in z loop
+counter:=rec.cnt_cour;
+dbms_output.put_line(counter);
+instructorid:=rec.instruc_id;
+dbms_output.put_line(instructorid);
+update course_load set num_courses_assigned = counter where instruc_id=instructorid and year=year_input and semester=sem_input;
+dbms_output.put_line('row updated in table');
+end loop;
+end;
+
+exec num_courses_assign (2019, 'Fall');
+
+
+--Feature 6
+
+create or replace PROCEDURE sort_instruc (p_course_id IN NUMBER, b1_var in varchar2, p_year_schedule in number, p_schedule_sem in varchar2)
+   IS
+      --This will sort the instruct_id;
+      --TYPE l_instruc_id IS TABLE OF l_instruc_id.instruc_id%TYPE;
+      --ins_id l_instruc_id
+      --assign weights to instruct_ids the sorty
+      --i pls_integer;
+      --j pls_integer;
+      sch_id                      NUMBER;
+      l_num_Section_preferences   NUMBER;
+      t2_var                      NUMBER;
+      t_instruc_id                NUMBER;
+      max_sch_id                  NUMBER;
+      no_of_sec_willing           NUMBER;
+      p_instruct_weight           NUMBER;
+      l_COURSE_LOAD_MAX_LIMIT     NUMBER;
+      v_section_capacity          NUMBER;
+      CURSOR c2
+      IS
+         SELECT *
+           FROM instruct_matrix
+          WHERE course_id = p_course_id;
+
+
+      CURSOR fetch_unallot_secs
+      IS
+         SELECT *
+           FROM SECTION
+          WHERE     course_id = p_course_id
+                AND sec_id NOT IN (SELECT sec_id
+                                     FROM schedule
+                                    WHERE course_id = p_course_id);
+   BEGIN
+
+
+
+      BEGIN
+         FOR i IN c2
+         LOOP
+            -- we want to assign the weights to instructors here.
+            --suppose both instructor A and B need to teach two courses. A is assigned 1 course, and B is assigned nothing so far. Both A and B are willing to teach 2 sections of c. c has 3 unassigned sections. Now A's weight = min(2,3)*(2-1)=2, B's weight = min(2,3)*2=4. So the sort order is B, A.
+            --This loop is to assign weights to the  instructors;
+            SELECT num_section_preferences
+              INTO l_num_section_preferences
+              FROM instruct_matrix im
+             WHERE im.instruc_id = i.instruc_id;
+
+
+             -- This will give max course load for instructor
+             SELECT COURSE_LOAD_MAX_LIMIT
+              INTO l_COURSE_LOAD_MAX_LIMIT
+              FROM COURSE_LOAD cl
+             WHERE cl.instruc_id = i.instruc_id
+              and cl.SEMESTER = p_schedule_sem
+              and cl.YEAR     = p_year_schedule;
+
+
+
+
+            SELECT distinct num_courses_assigned
+              INTO t2_var
+              FROM instruct_matrix cl
+             WHERE cl.instruc_id = i.instruc_id; -- This will hold the number of courses assigned to the instructor as of now.
+
+            --b1_var -- global variable this was used to calculate the no of unassigned sections of the course.
+            p_instruct_weight :=
+               LEAST (l_num_section_preferences, b1_var) * (l_COURSE_LOAD_MAX_LIMIT - t2_var);
+ --LEAST (l_num_section_preferences, b1_var) * (b1_var - t2_var);
+            --/*A is assigned 1 course, and B is assigned nothing so far. Both A and B are willing to teach 2 sections of c. c
+            -- has 3 unassigned sections. Now A's weight = min(2,3)*(2-1)=2, B's weight = min(2,3)*2=4. So the sort order is B, A. */
+
+
+update instruct_matrix set
+instruct_weight = p_instruct_weight
+where instruc_id = i.instruc_id;
+
+         --We inserted weights now in our table.
+         END LOOP;
+      END;
+
+      BEGIN
+         FOR i IN c2
+         LOOP
+            --now lets assign the sections  to  the instructors--
+            --the number of sections  that will be assigned to the instructor, is the minimal of unassigned sections of c and number of sections i is willing to teach.SELECT num_section_preferences
+           
+           
+            SELECT num_section_preferences
+              INTO l_num_section_preferences
+              FROM instruct_matrix im
+             WHERE im.instruc_id = i.instruc_id;
+
+            no_of_sec_willing := LEAST (b1_var, l_num_section_preferences);
+
+            IF (no_of_sec_willing > 0)
+            THEN
+               FOR j IN fetch_unallot_secs
+               LOOP
+               begin
+            -- Calculate Section capacity here
+            select count(*) into v_section_capacity from
+            REGISTRATION R where COURSE_ID = p_course_id
+            and  j.sec_id = SEC_ID;
+             EXCEPTION
+              WHEN NO_DATA_FOUND
+              THEN
+                 DBMS_OUTPUT.put_line (
+                       p_course_id
+                    || ' :-'
+                    || 'This Course or Section is not registered by any student');
+            end;
+                  SELECT MAX (schedule_id) INTO max_sch_id FROM schedule;
+
+                  SELECT instruc_id
+                    INTO t_instruc_id
+                    FROM instruct_matrix
+                   WHERE instruct_weight IN (SELECT MAX (instruct_weight)
+                                               FROM instruct_matrix
+                                              WHERE instruc_id = i.instruc_id);
+max_sch_id := max_sch_id + 1;
+
+INSERT INTO schedule (schedule_id,
+                                  course_id,
+                                  sec_id,
+                                  instruc_id,
+                                   year_schedule,
+                                   schedule_sem,
+                                   SEC_CAPACITY)
+                 VALUES (max_sch_id,
+                         p_course_id,
+                         j.sec_id,
+                         i.instruc_id,
+                         p_year_schedule,
+                         p_schedule_sem,
+                         v_section_capacity);
+                        -- commit;
+               END LOOP;
+            END IF;
+         END LOOP;
+         commit;
+      END;
+   EXCEPTION
+      WHEN NO_DATA_FOUND --OTHERS
+      THEN
+         DBMS_OUTPUT.put_line (
+               p_course_id
+            || ' :-'
+            || 'For this course_id the sorting algo has failed');
+   END sort_instruc;
+
+
+create or replace procedure instruct_assignment(p_course_id      IN NUMBER,
+                            p_course_year    IN NUMBER,
+                            p_schedule_sem   IN VARCHAR2)
+   IS
+   v_count number;
+   v_INSTRUC_ID number;
+   v_num_section_preferences  number;
+     -- variables for course assign
+      l_var   NUMBER;
+      t_var   NUMBER;
+      d_var   VARCHAR2 (200);
+   -- variables to check course id
+       A1_VAR varchar2(50);
+       b1_var varchar2(50);--number;
+       A_VAR  varchar2(50);--number;
+       B_VAR  varchar2(50);--number;
+        c_var               VARCHAR2 (100) := 'TRUE';
+       
+   --- Get all intructors & work load here which are available to teach for semester and year
+      CURSOR instr_cur
+      IS
+      SELECT tr.INSTRUC_ID, cl.COURSE_LOAD_MAX_LIMIT from TEACHING_PREFERENCES  tr, COURSE_LOAD cl
+      WHERE tr.COURSE_ID = p_course_id and tr.SEMS_SPEC_INS = p_schedule_sem  
+      and tr.YEAR_SPE_INS =p_course_year and tr.SEMS_SPEC_INS = cl.SEMESTER
+      and  cl.YEAR= tr.YEAR_SPE_INS
+      and tr.INSTRUC_ID = cl.INSTRUC_ID;
+     
+      begin
+        v_count := 0;
+        delete from instruct_matrix;
+        commit;
+        BEGIN                  -- To check the validity of the   input course_id
+         IF (p_course_id = NULL)
+         THEN
+            DBMS_OUTPUT.Put_line ('Please provide a course_id');
+            c_var := 'FALSE';
+         END IF;
+
+         SELECT COUNT (course_id)
+           INTO a1_var
+           FROM course
+          WHERE course_id = p_course_id;
+
+         IF (a1_var != 1)
+         THEN
+            DBMS_OUTPUT.Put_line (
+               p_course_id || ' :-' || 'this is an invalid course_id');
+               c_var := 'FALSE';
+         END IF;
+      EXCEPTION
+         WHEN NO_DATA_FOUND
+         THEN
+            DBMS_OUTPUT.Put_line (
+               p_course_id || ' :-' || 'this is an invalid course_id');
+      END;
+
+      BEGIN
+         --selecting the number of sections belonging to the input course_id
+         SELECT num_secs
+           INTO a_var
+           FROM course
+          WHERE course_id = p_course_id;
+      EXCEPTION
+         WHEN NO_DATA_FOUND
+         THEN
+            DBMS_OUTPUT.Put_line (
+                  p_course_id
+               || ' :-'
+               || 'this course_id has no number of sections defined');
+         WHEN OTHERS
+         THEN
+            DBMS_OUTPUT.Put_line (
+               'An unexpected error has occured please raise with IT team');
+      END;
+
+      --selecting the current scheduled sections of the course belonging  to the input course_id
+      BEGIN
+           SELECT COUNT (sec_id)
+             INTO b_var
+             FROM schedule
+            WHERE course_id = p_course_id
+         GROUP BY course_id;
+      EXCEPTION
+         WHEN NO_DATA_FOUND then b_var := 0;-- Will be used only for Fresh course
+          WHEN OTHERS
+         THEN
+            DBMS_OUTPUT.Put_line (
+               'An unexpected error has occured please raise with IT team');
+      END;
+
+      --comparing the number of scheduled sections of the course with the number of sections of the course
+      IF (a_var <= b_var)
+      THEN
+         DBMS_OUTPUT.Put_line (
+               p_course_id
+            || ' :-'
+            || 'all the sections belonging to this course id are already scheduled');
+            c_var := 'FALSE';
+      ELSE
+       
+         b1_var := a_var - b_var;
+
+         DBMS_OUTPUT.Put_line (
+               p_course_id
+            || ' :-'
+            || 'For this course_id the number of sections that yet to be scheduled are'
+            || '='
+            || b1_var);
+         
+      END IF;
+ IF (c_var = 'TRUE') then
+       FOR inx1 IN instr_cur
+         LOOP
+         -- Filter those instruct whos course load has reached
+         begin
+         select distinct INSTRUC_ID into v_INSTRUC_ID from SCHEDULE sch
+         where sch.YEAR_SCHEDULE = p_course_year
+         and sch.SCHEDULE_SEM = p_schedule_sem
+         and inx1.INSTRUC_ID = INSTRUC_ID
+         and inx1.COURSE_LOAD_MAX_LIMIT > ( select count (*) from SCHEDULE where INSTRUC_ID = inx1.INSTRUC_ID);
+         EXCEPTION when others then null;
+         end;
+             DBMS_OUTPUT.Put_line ('These are available instructor '  || v_INSTRUC_ID);
+             
+             -- Sort instructors in I in descending order of a weight.
+             begin
+             SELECT NUM_SECTION_PREFERENCES
+              INTO v_num_section_preferences
+              FROM TEACHING_PREFERENCES im
+             WHERE im.instruc_id = inx1.instruc_id;
+             EXCEPTION when others then null;
+             end;
+             
+         if v_INSTRUC_ID > 0 then
+             v_count := v_count +1;
+             
+         INSERT INTO instruct_matrix (instruc_id,
+                                      course_id,
+                                      num_section_preferences,
+                                      num_courses_assigned)
+                                      select inx1.INSTRUC_ID, p_course_id, v_num_section_preferences, (select count (*) from SCHEDULE where INSTRUC_ID = inx1.INSTRUC_ID) from dual;
+
+                                      end if;
+                                --      commit;
+         END LOOP;
+         DBMS_OUTPUT.Put_line (v_count);
+         if v_count = 0 then
+         DBMS_OUTPUT.Put_line ('not enough sections are assigned due to lack of faculty');
+         end if;
+         sort_instruc (p_course_id,b1_var, p_course_year,p_schedule_sem); -- Call here to insert into schedule
+         
+ end if;        
+      end;
+
+
+
+Exec instruct_assignment (121, 2019, 'Fall');
+---- Already assigned
+
+
+Exec instruct_assignment (333, 2019, 'Fall');
+----.333 :-For this course_id the number of sections that yet to be scheduled are=30
+not enough sections are assigned due to lack of faculty
+
+begin
+instruct_assignment(7001,2019,'Fall');
+end; 
+
+begin
+instruct_assignment(121,2019,'Fall');
+end; 
+
+begin
+instruct_assignment(122,2019,'Fall');
+end; 
+
+begin
+instruct_assignment(7020,2018,'Fall');
+end; 
+
+
+--Feature 7
+
+create or replace procedure assign_course_in_department(year_input in int,sem_input varchar)
+is
+cursor c1 is select c.course_id,i.instruc_id from department d,program p,course c,instructors i
+where d.dept_id=p.dept_id and p.program_id=c.program_id and
+c.req_or_elec=1 and i.dept_id=d.dept_id and rownum<5;
+cursor c2 is select c.course_id,i.instruc_id from department d,program p,course c,instructors i
+where d.dept_id=p.dept_id and p.program_id=c.program_id and
+c.req_or_elec=0 and i.dept_id=d.dept_id and rownum<5;
+
+
+c_id int;
+c2_id;
+i_id int;
+i_id2 int;
+c_load int;
+l_var int;
+t_var int;
+final_check int;
+c_load_final int;
+begin
+open c1;
+loop fetch c1 into c_id,i_id;
+exit when c1%notfound;
+instruct_assignment(c_id,year_input,sem_input);
+SELECT Count(instruc_id) 
+            INTO   l_var 
+            FROM   schedule 
+            WHERE  instruc_id = i_id
+            GROUP  BY course_id;
+SELECT course_load_max_limit 
+            INTO   t_var 
+            FROM   course_load 
+            WHERE  instruc_id = i_id;
+if l_var< t_var then
+    open c2;
+     loop fetch c2 into c2_id,i_id2;
+     exit when c2%notfound;
+instruct_assignment(c2_id,year_input,sem_input);
+SELECT Count(instruc_id) 
+            INTO   final_check 
+            FROM   schedule 
+            WHERE  instruc_id = i_id
+            GROUP  BY course_id;
+SELECT course_load_max_limit 
+            INTO   c_load_final 
+            FROM   course_load 
+            WHERE  instruc_id = i_id;       
+if final_check <c_load_final  then
+dbms_output.put_line('this instructor still did not match course load and id is'||i_id2);
+end if;
+     
+end loop;
+close c2;
+end if;
+end loop;
+close c1;
+end;
+/
+exec assign_course_in_department(2019,'Fall');
+
+
+--Feature 8
+
+create or replace PROCEDURE assign_room (p_schedule_id   IN NUMBER)
+   IS
+      --this procedure is 2.
+      -- Assign room and time to a scheduled section. Input includes a schedule id. First check whether the schedule id is valid. If not print an error message. Next check whether the scheduled section already has a room and time block. If so print an error message saying that the course is already assigned. Otherwise find a room and a time block pair that satisfies the following conditions
+
+      max_time_block_id   NUMBER;
+      p_time_block_id     NUMBER;
+      l_start_time        INTERVAL DAY TO SECOND;
+      l_time_len          INTERVAL DAY TO SECOND;
+      p_time_day          NUMBER;
+      p_class_room_id     NUMBER;
+      p_year_schedule     NUMBER;
+      p_schedule_sem      VARCHAR2 (200);
+      p_instruc_id        NUMBER;
+      p_course_id         NUMBER;
+      p_sec_id            NUMBER;
+      v_un_graduate_prog  NUMBER;
+      c_room_status               VARCHAR2 (100) := 'TRUE';
+      c_block_id_status           VARCHAR2 (100) := 'TRUE';
+      CURSOR c3
+      IS
+      SELECT *
+           FROM schedule
+          WHERE schedule_id = p_schedule_id;
+         
+   BEGIN
+   -- First check if its valid schedule ID
+   --DBMS_OUTPUT.Put_line ('test.');
+   begin
+      SELECT   time_block_id,  instruc_id,    course_id,   sec_id, SCHEDULE_SEM  , YEAR_SCHEDULE
+        INTO p_time_block_id, p_instruc_id, p_course_id, p_sec_id, p_schedule_sem, p_year_schedule
+        FROM schedule
+       WHERE schedule_id = p_schedule_id;
+       EXCEPTION
+       WHEN NO_DATA_FOUND
+         THEN
+            DBMS_OUTPUT.Put_line (
+                  p_schedule_id
+               || ' :-'
+               || 'this schedule_id doesnt exist.');    
+       end;
+
+
+    -- Second check if course is assigned
+      IF (p_time_block_id IS NOT NULL)
+      THEN
+         DBMS_OUTPUT.Put_line ('course is already assigned to Time Block.');
+      else
+    -- third find a room and a time block pair that satisfies the following conditions
+
+      FOR i IN c3
+         LOOP
+   
+     
+   
+begin
+--- Selecting class room
+select cr.CLASS_ROOM_ID into p_class_room_id from CLASS_ROOM cr
+where cr.NUM_SEATS >= (select s.SEC_CAPACITY from schedule s where s.schedule_id = p_schedule_id )     -- Class room capacity check
+and rownum = 1 and cr.room_type in (select  c.ROOM_TYPE from schedule s, COURSE c where s.schedule_id = p_schedule_id  -- Room type computure / regular
+and s.COURSE_ID = c.COURSE_ID)
+-- below avoid conflict of time block  class room
+and cr.CLASS_ROOM_ID not in (select sch2.CLASS_ROOM_ID from schedule  sch2 where sch2.TIME_BLOCK_ID in
+                            (select t.TIME_BLOCK_ID  from PROGRAM prg, COURSE c , TIME_BLOCK t where  prg.program_id = c.program_id
+and t.course_id = c.course_id
+and c.course_id = p_course_id
+and t.TIME_BLOCK_ID not in ( select sch1.TIME_BLOCK_ID from SCHEDULE sch1 where sch1.SCHEDULE_SEM = p_schedule_sem
+                                                                            and sch1.YEAR_SCHEDULE = p_year_schedule
+                                                                            and sch1.TIME_BLOCK_ID is not null) -- To avoid same block id conflict
+and (start_time > '+000000000 16:30:00.000000000'  --- If it is graduate program
+     or v_un_graduate_prog = 1)                  --- If it is under graduate program
+and to_char(t.TIME_DAY) not in    ( select regexp_substr(CANNOT_TEACH_DAYS,'[^,]+', 1, level)  -- The day of week is not one of the blackout days of the instructor.
+from TEACHING_PREFERENCES  where p_instruc_id = INSTRUC_ID
+connect BY regexp_substr(CANNOT_TEACH_DAYS, '[^,]+', 1, level)
+is not null)) );
+EXCEPTION
+       WHEN NO_DATA_FOUND
+         THEN
+        c_room_status:= 'FALSE';
+            DBMS_OUTPUT.Put_line (
+                  p_schedule_id
+               || ' :-'
+               || 'Class room is unavailable for given conditions.');    
+       end;
+---
+
+-- To understand if it is Under Graduate program
+select count(1) into v_un_graduate_prog from PROGRAM prg, COURSE c , TIME_BLOCK t where prg.P_TYPE = 1
+and prg.program_id = c.program_id
+and t.course_id = c.course_id
+and c.course_id = p_course_id;
+
+
+-- Selecting Time Block
+BEGIN
+select t.TIME_BLOCK_ID into max_time_block_id from PROGRAM prg, COURSE c , TIME_BLOCK t where  prg.program_id = c.program_id
+and t.course_id = c.course_id
+and c.course_id = p_course_id
+and t.TIME_BLOCK_ID not in ( select sch1.TIME_BLOCK_ID from SCHEDULE sch1 where sch1.SCHEDULE_SEM = p_schedule_sem
+                                                                            and sch1.YEAR_SCHEDULE = p_year_schedule
+                                                                            and sch1.TIME_BLOCK_ID is not null) -- To avoid same block id conflict
+and (start_time > '+000000000 16:30:00.000000000'  --- If it is graduate program
+     or v_un_graduate_prog = 1)                  --- If it is under graduate program
+and to_char(t.TIME_DAY)  not in    ( select regexp_substr(CANNOT_TEACH_DAYS,'[^,]+', 1, level)  -- The day of week is not one of the blackout days of the instructor.
+from TEACHING_PREFERENCES  where p_instruc_id = INSTRUC_ID
+connect BY regexp_substr(CANNOT_TEACH_DAYS, '[^,]+', 1, level)
+is not null) ;
+EXCEPTION
+       WHEN NO_DATA_FOUND
+         THEN
+         c_block_id_status:= 'FALSE';
+            DBMS_OUTPUT.Put_line (
+                  p_schedule_id
+               || ' :-'
+               || 'Time Block is not available.');    
+       end;
+   
+  IF c_room_status = 'TRUE' AND c_block_id_status = 'TRUE' THEN
+--     Update is required
+            Update SCHEDULE set
+            time_block_id = max_time_block_id,
+            class_room_id = p_class_room_id
+            where schedule_id = p_schedule_id;
+            DBMS_OUTPUT.Put_line ('Time Block  Class room inserted successfully is scheduled.');
+    COMMIT;
+  END IF;
+         END LOOP;
+      END IF;
+   END assign_room;
+/
+begin
+assign_room(6009);
+end;
+begin
+assign_room(6008);
+end;
+begin
+assign_room(6007);
+end;
+
+
+
+--Feature 9
+
+Create or replace procedure Assign_room_time(department_id in int,year_input in int,semester_input in varchar)
+is
+cursor c1 is select sch.schedule_id from schedule sch,department d,program p, course c
+where d.dept_id=department_id and sch.year_schedule=year_input and sch.schedule_sem=semester_input
+and d.dept_id=p.dept_id and c.program_id=p.program_id and c.course_id=sch.course_id and c.req_or_elec=1 and p.p_type=2;
+cursor c2 is select sch.schedule_id from schedule sch,department d,program p, course c
+where d.dept_id=department_id and sch.year_schedule=year_input and sch.schedule_sem=semester_input
+and d.dept_id=p.dept_id and c.program_id=p.program_id and c.course_id=sch.course_id and c.req_or_elec=0 and p.p_type=2;
+cursor c3 is select sch.schedule_id from schedule sch,department d,program p, course c
+where d.dept_id=department_id and sch.year_schedule=year_input and sch.schedule_sem=semester_input
+and d.dept_id=p.dept_id and c.program_id=p.program_id and c.course_id=sch.course_id and c.req_or_elec=1 and p.p_type=1;
+cursor c4 is select sch.schedule_id from schedule sch,department d,program p, course c
+where d.dept_id=department_id and sch.year_schedule=year_input and sch.schedule_sem=semester_input
+and d.dept_id=p.dept_id and c.program_id=p.program_id and c.course_id=sch.course_id and c.req_or_elec=0 and p.p_type=1;
+v_schedule int;
+v_schedule1 int;
+v_schedule2 int;
+v_schedule3 int;
+begin 
+  open c1;
+  loop
+  fetch c1 into v_schedule;
+  assign_room(v_schedule);
+  exit when c1%notfound;
+  end loop;
+  close c1;
+  open c2;
+  loop
+  fetch c2 into v_schedule1;
+  assign_room(v_schedule1);
+  exit when c2%notfound;
+  end loop;
+  close c2;
+  open c3;
+  loop
+  fetch c3 into v_schedule2;
+  assign_room(v_schedule2);
+  exit when c3%notfound;
+  end loop;
+  close c3;
+  open c4;
+  loop
+  fetch c4 into v_schedule3;
+  assign_room(v_schedule3);
+  exit when c4%notfound;
+  end loop;
+  close c4;
+end;
+/
+exec Assign_room_time(1,2019,'Fall');
+
+--Feature 11
+
+
+SET SERVEROUTPUT ON;
+  create or replace function verifyPrereq(stud_id in student.student_id%type, sch_id in schedule.schedule_id%type)
+  return int is
+  op int;
+  n_prereq number;
+  c_id course.course_id%type;
+  prereq_id course.course_id%type;
+  v_sch number;
+  p_count number;
+  v_stud number;
+  cnt number;
+  c_type course.req_or_elec%type;
+
+  Cursor c1 is select prereq from prerequisite where course_id = c_id; -- getting all prereqs of that courses
+  BEGIN
+  p_count := 0;   ---- initializing the no.of prerq of course to 0
+  select count(*) into v_stud from student where student_id = stud_id;
+  select count(*) into v_sch from schedule where schedule_id = sch_id;
+  select course_id into c_id from schedule where schedule_id = sch_id;
+  select count(*) into p_count from prerequisite where course_id = c_id; --- number of prereqs for that course
+  select req_or_elec into c_type from course where course_id = c_id;  ---- checking whethere course is elective or core
+
+  if v_sch > 0 and v_stud > 0 then  --- validity check for both IDS
+  if c_type = 1 then
+  return 1;              ---- assuming core has no electives
+  else
+  if p_count = 0 then     ---- course not core and having no prereqs
+    return 1;
+  end if;
+  --- course has prereqs then
+   open c1;
+   loop
+   fetch c1 into prereq_id;
+   exit when c1%NOTFOUND;
+--  count = count+1;
+   select count(*) into cnt from registration where student_id = stud_id and course_id = prereq_id and reg_status < 2;  --- whether student has registered for that course without drropping it
+   if cnt > 0 then
+    n_prereq := n_prereq + 1; --- counter for how mnay prereqs he has registered for
+   end if;
+   end loop;
+   close c1;
+--   elsif p_count > 0 and p_count is not null then
+   if n_prereq = p_count then
+    return 1;                ----- course is elective and he has taken all prereqs
+   else
+    return 0;                ----- course is elective and he has not taken all prereqs
+   end if;
+   end if;
+   else
+     dbms_output.put_line('Invalid Schedule ID');
+     return -1;
+   end if;
+   end verifyPrereq;
+  /
+  declare
+  op int;
+  student_id int;
+  schedule_id int;
+  begin
+--  op := verifyPrereq(10, 6021); --- validity check
+    op := verifyPrereq(1, 6008); --- course with 1 prereq(331)
+--  op := verifyPrereq(1, 6009); --- course with more than 1 prereq(125)
+--  op := verifyPrereq(1, 6001); --- course without electve()
+--  op := verifyPrereq(7, 6001); --- core course
+
+  dbms_output.put_line(op);
+  end;
+
+--Feature 10
+
+SET SERVEROUTPUT ON;
+create or replace procedure enter_sp(stud_id in student.student_id%type, sch_id in schedule.schedule_id%type) IS
+stud_check number;
+sch_check number;
+c_id course.course_id%type;
+prereq_op number;
+sch_status number;
+BEGIN
+select count(*) into stud_check from student where student_id = stud_id;
+select count(*) into sch_check from schedule where schedule_id = sch_id;
+select course_id into c_id from schedule where schedule_id = sch_id;
+dbms_output.put_line('Course id: ' ||c_id);
+select wait_list_status into sch_status from schedule where schedule_id = sch_id;
+dbms_output.put_line('Schedule status: ' ||sch_status);
+prereq_op := verifyPrereq(stud_id, sch_id);  --- prereq for core courses
+dbms_output.put_line('Prerep op: ' ||prereq_op);
+if stud_check > 0 and sch_check > 0  then
+ if prereq_op = 0 and sch_status = 1 then
+ dbms_output.put_line('Not prereq case');
+  insert into special_permission values(stud_id, sch_id, 2);
+ end if;
+ if sch_status = 0 then
+  insert into special_permission values(stud_id, sch_id, 1);
+ end if;
+else
+ dbms_output.put_line('Invalid Student ID or Schedule ID or both');
+end if;
+end enter_sp;
+
+--Feature 12
+
+set serveroutput on;
+create or replace procedure register_course(sch_id in int, stud_id in int)
+IS
+Valid_stid int;
+Valid_schid int;
+Var_grade int;
+Var_secid int;
+r_status number;
+sp_type number;
+s_status number;
+sp_type1 number;
+c_id number;
+s_id number;
+v_sec_cap number;          
+s_cap number;
+w_list number;
+Begin
+Select count(*) into valid_stid from student where student_id=stud_id;
+Select count(*) into valid_schid from schedule where schedule_id=sch_id;
+Select course_id into c_id from schedule where schedule_id=sch_id;
+Select sec_id into s_id from schedule where schedule_id=sch_id;
+  if (valid_stid!=0 and valid_schid!=0) then
+  --select sec_id into var_secid from schedule where schedule_id=sch_id;
+select grade into var_grade from registration where sec_id=var_secid;
+  if var_grade=0 then
+Select reg_status
+into r_status
+from registration r, section s,prerequisite p where r.student_id=stud_id and s.sec_id=
+  (select sec_id from schedule where schedule_id=sch_id) and r.sec_id=s.sec_id and p.prereq=
+  (select prereq from prerequisite where course_id=(select course_id from schedule where schedule_id=sch_id))and
+   p.course_id=s.course_id;
+   --select special_permission_type into sp_type from special_permission where student_id=stud_id and schedule_id=sch_id;
+       if
+      sp_type=2 then
+      select status into s_status from section where sec_id=(select sec_id from schedule where schedule_id=sch_id);
+          if
+     s_status=1 then
+     select special_permission_type into sp_type1 from special_permission where student_id=stud_id and schedule_id=sch_id;
+   if sp_type1= 1 then
+      insert into registration values(stud_id,c_id,1,null,s_id);
+     Select Count(*) into v_sec_cap from registration where sec_id= (select sec_id from schedule where schedule_id=sch_id) and reg_status=1;
+     Select sec_capacity into s_cap from schedule where schedule_id=sch_id;
+   if v_sec_cap=s_cap then
+       update section
+       set status=0 where sec_id=(select sec_id from schedule where schedule_id=sch_id);
+       select count(*) into w_list from waitlist where schedule_id=sch_id;
+   if w_list<10 then
+     update waitlist
+     set waitlist_position=(select max(waitlist_position) from waitlist where schedule_id=sch_id)
+     where schedule_id=sch_id;
+    else
+    dbms_output.put_line('waitlist is full');
+end if;
+end if;
+else
+dbms_output.put_line('error student does not have special permission');
+end if;
+else
+dbms_output.put_line('error student already took course');
+end if;
+end if;
+else
+dbms_output.put_line('error student does not have special permission');
+end if;
+elsif valid_stid=0 or valid_schid=0 then
+dbms_output.put_line('IT IS INVALID');
+end if;
+exception
+   when no_data_found then
+   dbms_output.put_line('no rows found');
+   when too_many_rows then
+   dbms_output.put_line('too many rows');
+end;
+/
+EXEC register_course(6001,44);
+
+--Feature 13
+
+set SERVEROUTPUT ON;
+Create or replace procedure drop_student(Studentid in int,scheduleid in int)
+IS
+cursor c1 is select r.reg_status,sch.course_id 
+   from registration r,student s,schedule sch
+   where r.student_id=s.student_id and
+   sch.course_id=r.course_id and sch.schedule_id=scheduleid and s.student_id=studentid;
+
+V_check_reg int;
+v_status int;
+C_waitlist int;
+Sec_size int;
+sec_cap int;
+cour_id int;
+min_wait int;
+wl_pos int;
+begin
+   open c1;
+   loop
+   fetch c1 into v_status,cour_id;
+   exit when c1%notfound;
+---checking whether the student has registered for the course or not.
+   if v_status!=0 and v_status!=1 then
+   dbms_output.put_line('the student is not registered with that course');
+---cheching if he is on waitlist.
+   elsif v_status=0 then
+   select waitlist_position into wl_pos from waitlist where student_id=studentid and schedule_id=scheduleid;
+   delete from waitlist where student_id=studentid and schedule_id=scheduleid;
+   update registration 
+   set reg_status=2
+   where student_id=studentid and course_id=(select course_id from schedule where schedule_id=scheduleid);
+   update waitlist
+   set waitlist_position=waitlist_position-1
+   where waitlist_Position >wl_pos
+   and schedule_id=scheduleid;
+---cheching if the student is enrolled or not.
+   elsif v_status=1 then
+   select student_id into min_wait from waitlist where schedule_id=scheduleid and 
+   waitlist_position =(select min(waitlist_position)from waitlist where schedule_id=scheduleid);
+   delete from waitlist
+   where student_id=min_wait and schedule_id=scheduleid;
+   update registration 
+   set reg_status=1
+   where student_id=min_wait and course_id=(select course_id from schedule where schedule_id=scheduleid);
+   update waitlist
+   set waitlist_position=waitlist_position-1
+   where waitlist_Position >=(select min(waitlist_position)from waitlist where schedule_id=scheduleid)
+   and schedule_id=scheduleid;
+   
+end if;
+end loop;
+close c1;
+select count(*) into C_waitlist from
+waitlist w,schedule sch
+where sch.schedule_id=scheduleid and w.schedule_id= sch.schedule_id ;
+--checking if the section reaches section capacity.
+if C_waitlist=0 then
+select section_size into sec_size from section Sec, schedule sch
+where sec.sec_id=sch.sec_id and sch.schedule_id=scheduleid;
+select sch.sec_capacity into sec_cap from  section Sec,schedule sch
+where sec.sec_id=sch.sec_id and sch.schedule_id=scheduleid;
+---check section capacity and set the status to open if capacity is not reached.
+if sec_size<sec_cap then
+update section 
+set status=1
+where sec_id=(select sec_id from schedule where schedule_id=scheduleid);
+end if;
+end if;
+exception
+	when no_data_found then
+	dbms_output.put_line('please provide valid ids');
+	
+	when too_many_rows then
+	dbms_output.put_line('more than one employee with the name, return the first one');
+end;
+ 
+/
+--not enrolled
+exec drop_student(7,6001);
+
+
+-waitlist 
+exec drop_student(3,6001);
+
+insert into registration values (4, 121, 5001, null, 0);
+--waitlist moving up
+exec drop_student(4,6001);
+
+exec drop_student(7,6008);
+/
+
+--Feature 14
+
+set SERVEROUTPUT ON;
+Create or replace procedure print_course_schedule(studentid in int,year_in in int,semester_in in varchar)
+Is
+cursor c1 is select c.course_id,c.course_name,sec.sec_id,r.reg_status,w.waitlist_position
+from course C,section Sec,registration r, waitlist w
+where c.course_id=sec.course_id and
+sec.course_id=r.course_id 
+and r.student_id=studentid and
+sec.year=year_in and
+sec.sem=semester_in and
+w.student_id=r.student_id;
+Courseid number;
+coursename course.course_name%type;
+section_id number;
+status_sec number;
+w_position number;
+begin 
+
+  open c1;
+  loop
+    fetch c1 into Courseid,coursename,section_id,status_sec,w_position;
+    exit when c1%notfound;
+    if status_sec!=0 then
+    dbms_output.put_line('course is'||courseid||'course name is'||coursename||'section is'||section_id||
+    'status is'||status_sec);
+    else
+    dbms_output.put_line('course is'||courseid||'course name is'||coursename||'section is'||section_id||
+    'status is'||status_sec||'waitlist position is'||w_position);
+    end if;
+    end loop;
+    close c1;
+
+
+exception
+	when no_data_found then
+	dbms_output.put_line('please provide valid ids');
+	
+	when too_many_rows then
+	dbms_output.put_line('more than one employee with the name, return the first one');
+   
+end;
+/
+exec print_course_schedule(1,2019,'Fall');
+--Feature 15
+
+/*Feature1.	
+Add a new course. Input includes course name, program id, number of credits, grading format, whether the course is required, room type, number of sections. 
+The feature checks if a course with the same name exists in the program. If so, update the existing course with the values of the input parameters. 
+Otherwise, insert a new course and generate a new course id. Please print out the new course id.*/
+
+
+
+set serveroutput on;
+create or replace procedure new_course(c_id in course.course_id%type, p_id in course.program_id%type, c_name in course.course_name%type, 
+c_credits in course.credits%type, c_gradef in course.grade_format%type, c_num in course.num_secs%type, c_roe in 
+course.req_or_elec%type, c_room in course.room_type%type) 
+is 
+v_count integer;
+v_id integer;
+begin
+select count(*) into v_count from course c where c.course_name = c_name;
+if v_count = 1 then
+select course_id into v_id from course c where c.course_name = c_name;
+update course set credits = c_credits, grade_format = c_gradef, num_secs = c_num, req_or_elec = c_roe where course_name = c_name;
+dbms_output.put_line('Course already exits');
+else
+insert into course values (c_id, p_id, c_name, c_credits, c_gradef, c_num, c_roe, c_room);
+dbms_output.put_line(c_id);
+end if;
+EXCEPTION
+when no_data_found then
+dbms_output.put_line('no data found');
+end;
+/
+exec new_course(221, 22, 'Artificial Intelligence', 3, 'P/F', 2, 0,'regular');
+/
+exec new_course(226,22,'HEALTHIT',3,'P/F',2,0,'regular')
+
+
+/*Feature2.	
+Add a new instructor. Input includes instructor name, department id, and instructor type (full time or part time). 
+Please check if an instructor with the same name exists at the same department with same instructor type. 
+If so print an error message. Otherwise insert the instructor and print out the generated instructor id.*/
+
+set serveroutput on;
+create or replace procedure new_instructors (v_insid in instructors.instruc_id%type, 
+v_dept in instructors.dept_id%type, v_insname in instructors.instruc_name%type, 
+v_job in instructors.job_type%type)
+is
+v_count integer;
+v_inid integer;
+begin
+select count(*) into v_count from instructors where instruc_name = v_insname;
+if v_count = 1 then
+select instruc_id into v_inid from instructors where instruc_name = v_insname;
+dbms_output.put_line('instructor name already exist');
+else
+insert into instructors values (v_insid, v_dept, v_insname, v_job);
+dbms_output.put_line(v_insid);
+end if;
+exception
+when no_data_found then
+dbms_output.put_line('no data found');
+end;
+/
+exec new_instructors(1004,1,'Chen','Full-time');
+/
+exec new_instructors(2006, 2, 'Dr. John', 'Part-Time');
+
+--Feature 3
+
+SET SERVEROUTPUT ON;
+create or replace procedure enter_teaching_preferences(ins_id in instructors.instruc_id%type, yr in teaching_preferences.year_spe_ins%type, sem in teaching_preferences.sems_spec_ins%type, w_courses in willing_Courses, w_sections in willing_sections, Cant_days in String) IS
+c_id course.course_id%type;
+course_lim number;
+current_num_courses number;
+c_name course.course_name%type;
+n number;
+cant_d string(30);
+v_instruc number;
+
+BEGIN
+select count(*) into v_instruc from instructors where instruc_id = ins_id;     ---- find whether instruc id is valid
+if v_instruc > 0 then
+n := REGEXP_COUNT (Cant_days, ',', 1) + 1; --- one comma means more than day
+select COURSE_LOAD_MAX_LIMIT into course_lim from course_load where instruc_id = ins_id; --- course limit of professsor for that sem and year
+select count(*) into current_num_courses from teaching_preferences where instruc_id = ins_id group by instruc_id;  -- getting num of courses currently teaching
+if (current_num_courses + w_courses.count) <= course_lim and n <= 2 then -- second and third check
+ for i in 1..w_courses.count loop
+  c_name := w_courses(i);
+  select course_ID into c_id from course where course_name = c_name;
+  insert into teaching_preferences values(ins_id, c_id, w_sections(i), sem, yr, cant_days);
+ end loop;
+else
+ dbms_output.put_line('Error: Course limit exceeded or Blackout days more than 2'); --- proper error msg
+end if;
+else
+ dbms_output.put_line('Invalid Instructor ID');
+end if;
+end enter_teaching_preferences;
+/
+
+exec enter_teaching_preferences(1001, 2019, 'Fall', willing_Courses('HCI', 'Data Mining'), willing_sections(1,2), '2, 4'); ---- will enter and make limit to 3
+exec enter_teaching_preferences(1001, 2019, 'Fall', willing_Courses('Information Retrieval'), willing_sections(1), '2, 4, 5'); --- error saying bd more
+exec enter_teaching_preferences(1001, 2019, 'Fall', willing_Courses('Information Retrieval'), willing_sections(1), '2, 4'); ---- error saying course load more
+exec enter_teaching_preferences(1041, 2019, 'Fall', willing_Courses('Information Retrieval'), willing_sections(1), '2, 4');  ---- invalid i_id
+
+
+delete from teaching_preferences where instruc_id = 1001 and course_id = 125; ---- ir
+delete from teaching_preferences where instruc_id = 1001 and course_id = 331; ---dm
+delete from teaching_preferences where instruc_id = 1001 and course_id = 126; ----hci
+
+
+
+/* Feature 4.
+Allow a student to search for all courses offered in a given year, semester, and program. The input includes year, semester, program id.
+The procedure prints out for each scheduled course section the name of the course, number of credits, grading format, schedule id, section id,
+name of instructor, name of classroom, days of class, start and end time of each class, and whether the class is open or full.
+Please order the results by course id and section number. Please also check whether input program id is valid.*/
+
+SET SERVEROUTPUT ON;
+create or replace procedure show_courses(yr in schedule.year_schedule%type, sem in schedule.schedule_sem%type, p_id in course.program_id%type) IS
+
+c_id course.course_id%type;
+cred course.credits%type;
+grading course.grade_format%type;
+sch_id schedule.schedule_id%type;
+ins_id instructors.instruc_id%type;
+s_id section.sec_id%type;
+cr_id class_room.class_room_id%type;
+tb_id time_block.time_block_id%type;
+s_time time_block.start_time%type;
+e_time time_block.start_time%type;
+t_day time_block.time_day%type;
+class_day varchar(20);
+class_status char(20);
+sec_stat section.status%type;
+nos course.num_secs%type;
+rname class_room.room_name%type;
+p_valid number;
+
+Cursor c1 is select course_id, credits, grade_format, num_secs from course where program_id = p_id order by course_id;  ---- selecting all courses of program
+Cursor c2 is select schedule_id, instruc_id, sec_id, class_room_id, time_block_id from schedule
+where course_ID = c_id and year_schedule = yr and schedule_sem = sem order by sec_id;  ---- selecting all schedules for year and semester
+
+BEGIN
+select count(*) into p_valid from program where program_id = p_id;  --- program id exists
+if p_valid = 0 then
+ dbms_output.put_line('Invalid Program ID');
+else
+class_status := 'open';   ----- initialise var to open at beginning
+open c1;
+loop
+  fetch c1 into c_id, cred, grading, nos;  ---- fetch all courses into variables
+  exit when c1%NOTFOUND;
+  open c2;
+  loop
+  fetch c2 into sch_id, ins_id, s_id, cr_id, tb_id;   ---- fetch all schedules into varibales
+  exit when c2%NOTFOUND;
+  select room_name into rname from class_room where class_room_id = cr_id;   ---- select all room with room id in the existing schedules
+  select start_time, (start_time + time_len), time_day into s_time, e_time, t_day from time_block where time_block_id = tb_id;   ---- select all time_blocks with tbid in existing schedule
+  if t_day = 1 then       ------ assigning day accoding to time_day
+   class_day := 'Monday';
+  elsif t_day = 2 then
+   class_day := 'Tuesday';
+  elsif t_day = 3 then
+   class_day := 'Wednesday';
+  elsif t_day = 4 then
+   class_day := 'Thursday';
+  elsif t_day = 5 then
+   class_day := 'Friday';
+   else
+   class_day :='Not available';
+  end if;
+  select status into sec_stat from section where sec_ID = s_id;  --- getting status of section
+  if sec_stat = 0 then
+   class_status := 'full';     ---- assigning class status based on section status
+  end if;
+  dbms_output.put_line('Course id: ' || c_id || ' Credits: ' || cred ||' Grading format: ' || grading ||' schedule id: '|| sch_id ||' instructor id: '|| ins_id ||
+  ' section id: '|| s_id || ' Class room: '|| rname || ' Class days: '|| class_day ||' Start time: '|| s_time ||' End time: '|| e_time || ' Class status: ' || class_status);
+END LOOP;
+close c2;
+END LOOP;
+close c1;
+end if;
+end show_courses;
+/
+
+exec show_courses(2019,'Fall',12);
+exec show_courses(2019,'Fall',22);
+exec show_courses(2019,'Spring',12);
+exec show_courses(2019,'Fall',122345);
+
+--Feature 5
+
+create or replace procedure num_courses_assign (year_input in number,sem_input in varchar)
+is
+cursor z is select instruc_id,count(course_id) as cnt_cour  from schedule
+where year_schedule=year_input and schedule_sem=sem_input group by instruc_id;
+counter int;
+instructorid int;
+begin
+for rec in z loop
+counter:=rec.cnt_cour;
+dbms_output.put_line(counter);
+instructorid:=rec.instruc_id;
+dbms_output.put_line(instructorid);
+update course_load set num_courses_assigned = counter where instruc_id=instructorid and year=year_input and semester=sem_input;
+dbms_output.put_line('row updated in table');
+end loop;
+end;
+
+exec num_courses_assign (2019, 'Fall');
+
+
+--Feature 6
+
+create or replace PROCEDURE sort_instruc (p_course_id IN NUMBER, b1_var in varchar2, p_year_schedule in number, p_schedule_sem in varchar2)
+   IS
+      --This will sort the instruct_id;
+      --TYPE l_instruc_id IS TABLE OF l_instruc_id.instruc_id%TYPE;
+      --ins_id l_instruc_id
+      --assign weights to instruct_ids the sorty
+      --i pls_integer;
+      --j pls_integer;
+      sch_id                      NUMBER;
+      l_num_Section_preferences   NUMBER;
+      t2_var                      NUMBER;
+      t_instruc_id                NUMBER;
+      max_sch_id                  NUMBER;
+      no_of_sec_willing           NUMBER;
+      p_instruct_weight           NUMBER;
+      l_COURSE_LOAD_MAX_LIMIT     NUMBER;
+      v_section_capacity          NUMBER;
+      CURSOR c2
+      IS
+         SELECT *
+           FROM instruct_matrix
+          WHERE course_id = p_course_id;
+
+
+      CURSOR fetch_unallot_secs
+      IS
+         SELECT *
+           FROM SECTION
+          WHERE     course_id = p_course_id
+                AND sec_id NOT IN (SELECT sec_id
+                                     FROM schedule
+                                    WHERE course_id = p_course_id);
+   BEGIN
+
+
+
+      BEGIN
+         FOR i IN c2
+         LOOP
+            -- we want to assign the weights to instructors here.
+            --suppose both instructor A and B need to teach two courses. A is assigned 1 course, and B is assigned nothing so far. Both A and B are willing to teach 2 sections of c. c has 3 unassigned sections. Now A's weight = min(2,3)*(2-1)=2, B's weight = min(2,3)*2=4. So the sort order is B, A.
+            --This loop is to assign weights to the  instructors;
+            SELECT num_section_preferences
+              INTO l_num_section_preferences
+              FROM instruct_matrix im
+             WHERE im.instruc_id = i.instruc_id;
+
+
+             -- This will give max course load for instructor
+             SELECT COURSE_LOAD_MAX_LIMIT
+              INTO l_COURSE_LOAD_MAX_LIMIT
+              FROM COURSE_LOAD cl
+             WHERE cl.instruc_id = i.instruc_id
+              and cl.SEMESTER = p_schedule_sem
+              and cl.YEAR     = p_year_schedule;
+
+
+
+
+            SELECT distinct num_courses_assigned
+              INTO t2_var
+              FROM instruct_matrix cl
+             WHERE cl.instruc_id = i.instruc_id; -- This will hold the number of courses assigned to the instructor as of now.
+
+            --b1_var -- global variable this was used to calculate the no of unassigned sections of the course.
+            p_instruct_weight :=
+               LEAST (l_num_section_preferences, b1_var) * (l_COURSE_LOAD_MAX_LIMIT - t2_var);
+ --LEAST (l_num_section_preferences, b1_var) * (b1_var - t2_var);
+            --/*A is assigned 1 course, and B is assigned nothing so far. Both A and B are willing to teach 2 sections of c. c
+            -- has 3 unassigned sections. Now A's weight = min(2,3)*(2-1)=2, B's weight = min(2,3)*2=4. So the sort order is B, A. */
+
+
+update instruct_matrix set
+instruct_weight = p_instruct_weight
+where instruc_id = i.instruc_id;
+
+         --We inserted weights now in our table.
+         END LOOP;
+      END;
+
+      BEGIN
+         FOR i IN c2
+         LOOP
+            --now lets assign the sections  to  the instructors--
+            --the number of sections  that will be assigned to the instructor, is the minimal of unassigned sections of c and number of sections i is willing to teach.SELECT num_section_preferences
+           
+           
+            SELECT num_section_preferences
+              INTO l_num_section_preferences
+              FROM instruct_matrix im
+             WHERE im.instruc_id = i.instruc_id;
+
+            no_of_sec_willing := LEAST (b1_var, l_num_section_preferences);
+
+            IF (no_of_sec_willing > 0)
+            THEN
+               FOR j IN fetch_unallot_secs
+               LOOP
+               begin
+            -- Calculate Section capacity here
+            select count(*) into v_section_capacity from
+            REGISTRATION R where COURSE_ID = p_course_id
+            and  j.sec_id = SEC_ID;
+             EXCEPTION
+              WHEN NO_DATA_FOUND
+              THEN
+                 DBMS_OUTPUT.put_line (
+                       p_course_id
+                    || ' :-'
+                    || 'This Course or Section is not registered by any student');
+            end;
+                  SELECT MAX (schedule_id) INTO max_sch_id FROM schedule;
+
+                  SELECT instruc_id
+                    INTO t_instruc_id
+                    FROM instruct_matrix
+                   WHERE instruct_weight IN (SELECT MAX (instruct_weight)
+                                               FROM instruct_matrix
+                                              WHERE instruc_id = i.instruc_id);
+max_sch_id := max_sch_id + 1;
+
+INSERT INTO schedule (schedule_id,
+                                  course_id,
+                                  sec_id,
+                                  instruc_id,
+                                   year_schedule,
+                                   schedule_sem,
+                                   SEC_CAPACITY)
+                 VALUES (max_sch_id,
+                         p_course_id,
+                         j.sec_id,
+                         i.instruc_id,
+                         p_year_schedule,
+                         p_schedule_sem,
+                         v_section_capacity);
+                        -- commit;
+               END LOOP;
+            END IF;
+         END LOOP;
+         commit;
+      END;
+   EXCEPTION
+      WHEN NO_DATA_FOUND --OTHERS
+      THEN
+         DBMS_OUTPUT.put_line (
+               p_course_id
+            || ' :-'
+            || 'For this course_id the sorting algo has failed');
+   END sort_instruc;
+
+
+create or replace procedure instruct_assignment(p_course_id      IN NUMBER,
+                            p_course_year    IN NUMBER,
+                            p_schedule_sem   IN VARCHAR2)
+   IS
+   v_count number;
+   v_INSTRUC_ID number;
+   v_num_section_preferences  number;
+     -- variables for course assign
+      l_var   NUMBER;
+      t_var   NUMBER;
+      d_var   VARCHAR2 (200);
+   -- variables to check course id
+       A1_VAR varchar2(50);
+       b1_var varchar2(50);--number;
+       A_VAR  varchar2(50);--number;
+       B_VAR  varchar2(50);--number;
+        c_var               VARCHAR2 (100) := 'TRUE';
+       
+   --- Get all intructors & work load here which are available to teach for semester and year
+      CURSOR instr_cur
+      IS
+      SELECT tr.INSTRUC_ID, cl.COURSE_LOAD_MAX_LIMIT from TEACHING_PREFERENCES  tr, COURSE_LOAD cl
+      WHERE tr.COURSE_ID = p_course_id and tr.SEMS_SPEC_INS = p_schedule_sem  
+      and tr.YEAR_SPE_INS =p_course_year and tr.SEMS_SPEC_INS = cl.SEMESTER
+      and  cl.YEAR= tr.YEAR_SPE_INS
+      and tr.INSTRUC_ID = cl.INSTRUC_ID;
+     
+      begin
+        v_count := 0;
+        delete from instruct_matrix;
+        commit;
+        BEGIN                  -- To check the validity of the   input course_id
+         IF (p_course_id = NULL)
+         THEN
+            DBMS_OUTPUT.Put_line ('Please provide a course_id');
+            c_var := 'FALSE';
+         END IF;
+
+         SELECT COUNT (course_id)
+           INTO a1_var
+           FROM course
+          WHERE course_id = p_course_id;
+
+         IF (a1_var != 1)
+         THEN
+            DBMS_OUTPUT.Put_line (
+               p_course_id || ' :-' || 'this is an invalid course_id');
+               c_var := 'FALSE';
+         END IF;
+      EXCEPTION
+         WHEN NO_DATA_FOUND
+         THEN
+            DBMS_OUTPUT.Put_line (
+               p_course_id || ' :-' || 'this is an invalid course_id');
+      END;
+
+      BEGIN
+         --selecting the number of sections belonging to the input course_id
+         SELECT num_secs
+           INTO a_var
+           FROM course
+          WHERE course_id = p_course_id;
+      EXCEPTION
+         WHEN NO_DATA_FOUND
+         THEN
+            DBMS_OUTPUT.Put_line (
+                  p_course_id
+               || ' :-'
+               || 'this course_id has no number of sections defined');
+         WHEN OTHERS
+         THEN
+            DBMS_OUTPUT.Put_line (
+               'An unexpected error has occured please raise with IT team');
+      END;
+
+      --selecting the current scheduled sections of the course belonging  to the input course_id
+      BEGIN
+           SELECT COUNT (sec_id)
+             INTO b_var
+             FROM schedule
+            WHERE course_id = p_course_id
+         GROUP BY course_id;
+      EXCEPTION
+         WHEN NO_DATA_FOUND then b_var := 0;-- Will be used only for Fresh course
+          WHEN OTHERS
+         THEN
+            DBMS_OUTPUT.Put_line (
+               'An unexpected error has occured please raise with IT team');
+      END;
+
+      --comparing the number of scheduled sections of the course with the number of sections of the course
+      IF (a_var <= b_var)
+      THEN
+         DBMS_OUTPUT.Put_line (
+               p_course_id
+            || ' :-'
+            || 'all the sections belonging to this course id are already scheduled');
+            c_var := 'FALSE';
+      ELSE
+       
+         b1_var := a_var - b_var;
+
+         DBMS_OUTPUT.Put_line (
+               p_course_id
+            || ' :-'
+            || 'For this course_id the number of sections that yet to be scheduled are'
+            || '='
+            || b1_var);
+         
+      END IF;
+ IF (c_var = 'TRUE') then
+       FOR inx1 IN instr_cur
+         LOOP
+         -- Filter those instruct whos course load has reached
+         begin
+         select distinct INSTRUC_ID into v_INSTRUC_ID from SCHEDULE sch
+         where sch.YEAR_SCHEDULE = p_course_year
+         and sch.SCHEDULE_SEM = p_schedule_sem
+         and inx1.INSTRUC_ID = INSTRUC_ID
+         and inx1.COURSE_LOAD_MAX_LIMIT > ( select count (*) from SCHEDULE where INSTRUC_ID = inx1.INSTRUC_ID);
+         EXCEPTION when others then null;
+         end;
+             DBMS_OUTPUT.Put_line ('These are available instructor '  || v_INSTRUC_ID);
+             
+             -- Sort instructors in I in descending order of a weight.
+             begin
+             SELECT NUM_SECTION_PREFERENCES
+              INTO v_num_section_preferences
+              FROM TEACHING_PREFERENCES im
+             WHERE im.instruc_id = inx1.instruc_id;
+             EXCEPTION when others then null;
+             end;
+             
+         if v_INSTRUC_ID > 0 then
+             v_count := v_count +1;
+             
+         INSERT INTO instruct_matrix (instruc_id,
+                                      course_id,
+                                      num_section_preferences,
+                                      num_courses_assigned)
+                                      select inx1.INSTRUC_ID, p_course_id, v_num_section_preferences, (select count (*) from SCHEDULE where INSTRUC_ID = inx1.INSTRUC_ID) from dual;
+
+                                      end if;
+                                --      commit;
+         END LOOP;
+         DBMS_OUTPUT.Put_line (v_count);
+         if v_count = 0 then
+         DBMS_OUTPUT.Put_line ('not enough sections are assigned due to lack of faculty');
+         end if;
+         sort_instruc (p_course_id,b1_var, p_course_year,p_schedule_sem); -- Call here to insert into schedule
+         
+ end if;        
+      end;
+
+
+
+Exec instruct_assignment (121, 2019, 'Fall');
+---- Already assigned
+
+
+Exec instruct_assignment (333, 2019, 'Fall');
+----.333 :-For this course_id the number of sections that yet to be scheduled are=30
+not enough sections are assigned due to lack of faculty
+
+begin
+instruct_assignment(7001,2019,'Fall');
+end; 
+
+begin
+instruct_assignment(121,2019,'Fall');
+end; 
+
+begin
+instruct_assignment(122,2019,'Fall');
+end; 
+
+begin
+instruct_assignment(7020,2018,'Fall');
+end; 
+
+
+--Feature 7
+
+create or replace procedure assign_course_in_department(year_input in int,sem_input varchar)
+is
+cursor c1 is select c.course_id,i.instruc_id from department d,program p,course c,instructors i
+where d.dept_id=p.dept_id and p.program_id=c.program_id and
+c.req_or_elec=1 and i.dept_id=d.dept_id and rownum<5;
+cursor c2 is select c.course_id,i.instruc_id from department d,program p,course c,instructors i
+where d.dept_id=p.dept_id and p.program_id=c.program_id and
+c.req_or_elec=0 and i.dept_id=d.dept_id and rownum<5;
+
+
+c_id int;
+c2_id;
+i_id int;
+i_id2 int;
+c_load int;
+l_var int;
+t_var int;
+final_check int;
+c_load_final int;
+begin
+open c1;
+loop fetch c1 into c_id,i_id;
+exit when c1%notfound;
+instruct_assignment(c_id,year_input,sem_input);
+SELECT Count(instruc_id) 
+            INTO   l_var 
+            FROM   schedule 
+            WHERE  instruc_id = i_id
+            GROUP  BY course_id;
+SELECT course_load_max_limit 
+            INTO   t_var 
+            FROM   course_load 
+            WHERE  instruc_id = i_id;
+if l_var< t_var then
+    open c2;
+     loop fetch c2 into c2_id,i_id2;
+     exit when c2%notfound;
+instruct_assignment(c2_id,year_input,sem_input);
+SELECT Count(instruc_id) 
+            INTO   final_check 
+            FROM   schedule 
+            WHERE  instruc_id = i_id
+            GROUP  BY course_id;
+SELECT course_load_max_limit 
+            INTO   c_load_final 
+            FROM   course_load 
+            WHERE  instruc_id = i_id;       
+if final_check <c_load_final  then
+dbms_output.put_line('this instructor still did not match course load and id is'||i_id2);
+end if;
+     
+end loop;
+close c2;
+end if;
+end loop;
+close c1;
+end;
+/
+exec assign_course_in_department(2019,'Fall');
+
+
+--Feature 8
+
+create or replace PROCEDURE assign_room (p_schedule_id   IN NUMBER)
+   IS
+      --this procedure is 2.
+      -- Assign room and time to a scheduled section. Input includes a schedule id. First check whether the schedule id is valid. If not print an error message. Next check whether the scheduled section already has a room and time block. If so print an error message saying that the course is already assigned. Otherwise find a room and a time block pair that satisfies the following conditions
+
+      max_time_block_id   NUMBER;
+      p_time_block_id     NUMBER;
+      l_start_time        INTERVAL DAY TO SECOND;
+      l_time_len          INTERVAL DAY TO SECOND;
+      p_time_day          NUMBER;
+      p_class_room_id     NUMBER;
+      p_year_schedule     NUMBER;
+      p_schedule_sem      VARCHAR2 (200);
+      p_instruc_id        NUMBER;
+      p_course_id         NUMBER;
+      p_sec_id            NUMBER;
+      v_un_graduate_prog  NUMBER;
+      c_room_status               VARCHAR2 (100) := 'TRUE';
+      c_block_id_status           VARCHAR2 (100) := 'TRUE';
+      CURSOR c3
+      IS
+      SELECT *
+           FROM schedule
+          WHERE schedule_id = p_schedule_id;
+         
+   BEGIN
+   -- First check if its valid schedule ID
+   --DBMS_OUTPUT.Put_line ('test.');
+   begin
+      SELECT   time_block_id,  instruc_id,    course_id,   sec_id, SCHEDULE_SEM  , YEAR_SCHEDULE
+        INTO p_time_block_id, p_instruc_id, p_course_id, p_sec_id, p_schedule_sem, p_year_schedule
+        FROM schedule
+       WHERE schedule_id = p_schedule_id;
+       EXCEPTION
+       WHEN NO_DATA_FOUND
+         THEN
+            DBMS_OUTPUT.Put_line (
+                  p_schedule_id
+               || ' :-'
+               || 'this schedule_id doesnt exist.');    
+       end;
+
+
+    -- Second check if course is assigned
+      IF (p_time_block_id IS NOT NULL)
+      THEN
+         DBMS_OUTPUT.Put_line ('course is already assigned to Time Block.');
+      else
+    -- third find a room and a time block pair that satisfies the following conditions
+
+      FOR i IN c3
+         LOOP
+   
+     
+   
+begin
+--- Selecting class room
+select cr.CLASS_ROOM_ID into p_class_room_id from CLASS_ROOM cr
+where cr.NUM_SEATS >= (select s.SEC_CAPACITY from schedule s where s.schedule_id = p_schedule_id )     -- Class room capacity check
+and rownum = 1 and cr.room_type in (select  c.ROOM_TYPE from schedule s, COURSE c where s.schedule_id = p_schedule_id  -- Room type computure / regular
+and s.COURSE_ID = c.COURSE_ID)
+-- below avoid conflict of time block  class room
+and cr.CLASS_ROOM_ID not in (select sch2.CLASS_ROOM_ID from schedule  sch2 where sch2.TIME_BLOCK_ID in
+                            (select t.TIME_BLOCK_ID  from PROGRAM prg, COURSE c , TIME_BLOCK t where  prg.program_id = c.program_id
+and t.course_id = c.course_id
+and c.course_id = p_course_id
+and t.TIME_BLOCK_ID not in ( select sch1.TIME_BLOCK_ID from SCHEDULE sch1 where sch1.SCHEDULE_SEM = p_schedule_sem
+                                                                            and sch1.YEAR_SCHEDULE = p_year_schedule
+                                                                            and sch1.TIME_BLOCK_ID is not null) -- To avoid same block id conflict
+and (start_time > '+000000000 16:30:00.000000000'  --- If it is graduate program
+     or v_un_graduate_prog = 1)                  --- If it is under graduate program
+and to_char(t.TIME_DAY) not in    ( select regexp_substr(CANNOT_TEACH_DAYS,'[^,]+', 1, level)  -- The day of week is not one of the blackout days of the instructor.
+from TEACHING_PREFERENCES  where p_instruc_id = INSTRUC_ID
+connect BY regexp_substr(CANNOT_TEACH_DAYS, '[^,]+', 1, level)
+is not null)) );
+EXCEPTION
+       WHEN NO_DATA_FOUND
+         THEN
+        c_room_status:= 'FALSE';
+            DBMS_OUTPUT.Put_line (
+                  p_schedule_id
+               || ' :-'
+               || 'Class room is unavailable for given conditions.');    
+       end;
+---
+
+-- To understand if it is Under Graduate program
+select count(1) into v_un_graduate_prog from PROGRAM prg, COURSE c , TIME_BLOCK t where prg.P_TYPE = 1
+and prg.program_id = c.program_id
+and t.course_id = c.course_id
+and c.course_id = p_course_id;
+
+
+-- Selecting Time Block
+BEGIN
+select t.TIME_BLOCK_ID into max_time_block_id from PROGRAM prg, COURSE c , TIME_BLOCK t where  prg.program_id = c.program_id
+and t.course_id = c.course_id
+and c.course_id = p_course_id
+and t.TIME_BLOCK_ID not in ( select sch1.TIME_BLOCK_ID from SCHEDULE sch1 where sch1.SCHEDULE_SEM = p_schedule_sem
+                                                                            and sch1.YEAR_SCHEDULE = p_year_schedule
+                                                                            and sch1.TIME_BLOCK_ID is not null) -- To avoid same block id conflict
+and (start_time > '+000000000 16:30:00.000000000'  --- If it is graduate program
+     or v_un_graduate_prog = 1)                  --- If it is under graduate program
+and to_char(t.TIME_DAY)  not in    ( select regexp_substr(CANNOT_TEACH_DAYS,'[^,]+', 1, level)  -- The day of week is not one of the blackout days of the instructor.
+from TEACHING_PREFERENCES  where p_instruc_id = INSTRUC_ID
+connect BY regexp_substr(CANNOT_TEACH_DAYS, '[^,]+', 1, level)
+is not null) ;
+EXCEPTION
+       WHEN NO_DATA_FOUND
+         THEN
+         c_block_id_status:= 'FALSE';
+            DBMS_OUTPUT.Put_line (
+                  p_schedule_id
+               || ' :-'
+               || 'Time Block is not available.');    
+       end;
+   
+  IF c_room_status = 'TRUE' AND c_block_id_status = 'TRUE' THEN
+--     Update is required
+            Update SCHEDULE set
+            time_block_id = max_time_block_id,
+            class_room_id = p_class_room_id
+            where schedule_id = p_schedule_id;
+            DBMS_OUTPUT.Put_line ('Time Block  Class room inserted successfully is scheduled.');
+    COMMIT;
+  END IF;
+         END LOOP;
+      END IF;
+   END assign_room;
+/
+begin
+assign_room(6009);
+end;
+begin
+assign_room(6008);
+end;
+begin
+assign_room(6007);
+end;
+
+
+
+--Feature 9
+
+Create or replace procedure Assign_room_time(department_id in int,year_input in int,semester_input in varchar)
+is
+cursor c1 is select sch.schedule_id from schedule sch,department d,program p, course c
+where d.dept_id=department_id and sch.year_schedule=year_input and sch.schedule_sem=semester_input
+and d.dept_id=p.dept_id and c.program_id=p.program_id and c.course_id=sch.course_id and c.req_or_elec=1 and p.p_type=2;
+cursor c2 is select sch.schedule_id from schedule sch,department d,program p, course c
+where d.dept_id=department_id and sch.year_schedule=year_input and sch.schedule_sem=semester_input
+and d.dept_id=p.dept_id and c.program_id=p.program_id and c.course_id=sch.course_id and c.req_or_elec=0 and p.p_type=2;
+cursor c3 is select sch.schedule_id from schedule sch,department d,program p, course c
+where d.dept_id=department_id and sch.year_schedule=year_input and sch.schedule_sem=semester_input
+and d.dept_id=p.dept_id and c.program_id=p.program_id and c.course_id=sch.course_id and c.req_or_elec=1 and p.p_type=1;
+cursor c4 is select sch.schedule_id from schedule sch,department d,program p, course c
+where d.dept_id=department_id and sch.year_schedule=year_input and sch.schedule_sem=semester_input
+and d.dept_id=p.dept_id and c.program_id=p.program_id and c.course_id=sch.course_id and c.req_or_elec=0 and p.p_type=1;
+v_schedule int;
+v_schedule1 int;
+v_schedule2 int;
+v_schedule3 int;
+begin 
+  open c1;
+  loop
+  fetch c1 into v_schedule;
+  assign_room(v_schedule);
+  exit when c1%notfound;
+  end loop;
+  close c1;
+  open c2;
+  loop
+  fetch c2 into v_schedule1;
+  assign_room(v_schedule1);
+  exit when c2%notfound;
+  end loop;
+  close c2;
+  open c3;
+  loop
+  fetch c3 into v_schedule2;
+  assign_room(v_schedule2);
+  exit when c3%notfound;
+  end loop;
+  close c3;
+  open c4;
+  loop
+  fetch c4 into v_schedule3;
+  assign_room(v_schedule3);
+  exit when c4%notfound;
+  end loop;
+  close c4;
+end;
+/
+exec Assign_room_time(1,2019,'Fall');
+
+--Feature 11
+
+
+SET SERVEROUTPUT ON;
+  create or replace function verifyPrereq(stud_id in student.student_id%type, sch_id in schedule.schedule_id%type)
+  return int is
+  op int;
+  n_prereq number;
+  c_id course.course_id%type;
+  prereq_id course.course_id%type;
+  v_sch number;
+  p_count number;
+  v_stud number;
+  cnt number;
+  c_type course.req_or_elec%type;
+
+  Cursor c1 is select prereq from prerequisite where course_id = c_id; -- getting all prereqs of that courses
+  BEGIN
+  p_count := 0;   ---- initializing the no.of prerq of course to 0
+  select count(*) into v_stud from student where student_id = stud_id;
+  select count(*) into v_sch from schedule where schedule_id = sch_id;
+  select course_id into c_id from schedule where schedule_id = sch_id;
+  select count(*) into p_count from prerequisite where course_id = c_id; --- number of prereqs for that course
+  select req_or_elec into c_type from course where course_id = c_id;  ---- checking whethere course is elective or core
+
+  if v_sch > 0 and v_stud > 0 then  --- validity check for both IDS
+  if c_type = 1 then
+  return 1;              ---- assuming core has no electives
+  else
+  if p_count = 0 then     ---- course not core and having no prereqs
+    return 1;
+  end if;
+  --- course has prereqs then
+   open c1;
+   loop
+   fetch c1 into prereq_id;
+   exit when c1%NOTFOUND;
+--  count = count+1;
+   select count(*) into cnt from registration where student_id = stud_id and course_id = prereq_id and reg_status < 2;  --- whether student has registered for that course without drropping it
+   if cnt > 0 then
+    n_prereq := n_prereq + 1; --- counter for how mnay prereqs he has registered for
+   end if;
+   end loop;
+   close c1;
+--   elsif p_count > 0 and p_count is not null then
+   if n_prereq = p_count then
+    return 1;                ----- course is elective and he has taken all prereqs
+   else
+    return 0;                ----- course is elective and he has not taken all prereqs
+   end if;
+   end if;
+   else
+     dbms_output.put_line('Invalid Schedule ID');
+     return -1;
+   end if;
+   end verifyPrereq;
+  /
+  declare
+  op int;
+  student_id int;
+  schedule_id int;
+  begin
+--  op := verifyPrereq(10, 6021); --- validity check
+    op := verifyPrereq(1, 6008); --- course with 1 prereq(331)
+--  op := verifyPrereq(1, 6009); --- course with more than 1 prereq(125)
+--  op := verifyPrereq(1, 6001); --- course without electve()
+--  op := verifyPrereq(7, 6001); --- core course
+
+  dbms_output.put_line(op);
+  end;
+
+--Feature 10
+
+SET SERVEROUTPUT ON;
+create or replace procedure enter_sp(stud_id in student.student_id%type, sch_id in schedule.schedule_id%type) IS
+stud_check number;
+sch_check number;
+c_id course.course_id%type;
+prereq_op number;
+sch_status number;
+BEGIN
+select count(*) into stud_check from student where student_id = stud_id;
+select count(*) into sch_check from schedule where schedule_id = sch_id;
+select course_id into c_id from schedule where schedule_id = sch_id;
+dbms_output.put_line('Course id: ' ||c_id);
+select wait_list_status into sch_status from schedule where schedule_id = sch_id;
+dbms_output.put_line('Schedule status: ' ||sch_status);
+prereq_op := verifyPrereq(stud_id, sch_id);  --- prereq for core courses
+dbms_output.put_line('Prerep op: ' ||prereq_op);
+if stud_check > 0 and sch_check > 0  then
+ if prereq_op = 0 and sch_status = 1 then
+ dbms_output.put_line('Not prereq case');
+  insert into special_permission values(stud_id, sch_id, 2);
+ end if;
+ if sch_status = 0 then
+  insert into special_permission values(stud_id, sch_id, 1);
+ end if;
+else
+ dbms_output.put_line('Invalid Student ID or Schedule ID or both');
+end if;
+end enter_sp;
+
+--Feature 12
+
+set serveroutput on;
+create or replace procedure register_course(sch_id in int, stud_id in int)
+IS
+Valid_stid int;
+Valid_schid int;
+Var_grade int;
+Var_secid int;
+r_status number;
+sp_type number;
+s_status number;
+sp_type1 number;
+c_id number;
+s_id number;
+v_sec_cap number;          
+s_cap number;
+w_list number;
+Begin
+Select count(*) into valid_stid from student where student_id=stud_id;
+Select count(*) into valid_schid from schedule where schedule_id=sch_id;
+Select course_id into c_id from schedule where schedule_id=sch_id;
+Select sec_id into s_id from schedule where schedule_id=sch_id;
+  if (valid_stid!=0 and valid_schid!=0) then
+  --select sec_id into var_secid from schedule where schedule_id=sch_id;
+select grade into var_grade from registration where sec_id=var_secid;
+  if var_grade=0 then
+Select reg_status
+into r_status
+from registration r, section s,prerequisite p where r.student_id=stud_id and s.sec_id=
+  (select sec_id from schedule where schedule_id=sch_id) and r.sec_id=s.sec_id and p.prereq=
+  (select prereq from prerequisite where course_id=(select course_id from schedule where schedule_id=sch_id))and
+   p.course_id=s.course_id;
+   --select special_permission_type into sp_type from special_permission where student_id=stud_id and schedule_id=sch_id;
+       if
+      sp_type=2 then
+      select status into s_status from section where sec_id=(select sec_id from schedule where schedule_id=sch_id);
+          if
+     s_status=1 then
+     select special_permission_type into sp_type1 from special_permission where student_id=stud_id and schedule_id=sch_id;
+   if sp_type1= 1 then
+      insert into registration values(stud_id,c_id,1,null,s_id);
+     Select Count(*) into v_sec_cap from registration where sec_id= (select sec_id from schedule where schedule_id=sch_id) and reg_status=1;
+     Select sec_capacity into s_cap from schedule where schedule_id=sch_id;
+   if v_sec_cap=s_cap then
+       update section
+       set status=0 where sec_id=(select sec_id from schedule where schedule_id=sch_id);
+       select count(*) into w_list from waitlist where schedule_id=sch_id;
+   if w_list<10 then
+     update waitlist
+     set waitlist_position=(select max(waitlist_position) from waitlist where schedule_id=sch_id)
+     where schedule_id=sch_id;
+    else
+    dbms_output.put_line('waitlist is full');
+end if;
+end if;
+else
+dbms_output.put_line('error student does not have special permission');
+end if;
+else
+dbms_output.put_line('error student already took course');
+end if;
+end if;
+else
+dbms_output.put_line('error student does not have special permission');
+end if;
+elsif valid_stid=0 or valid_schid=0 then
+dbms_output.put_line('IT IS INVALID');
+end if;
+exception
+   when no_data_found then
+   dbms_output.put_line('no rows found');
+   when too_many_rows then
+   dbms_output.put_line('too many rows');
+end;
+/
+EXEC register_course(6001,44);
+
+--Feature 13
+
+set SERVEROUTPUT ON;
+Create or replace procedure drop_student(Studentid in int,scheduleid in int)
+IS
+cursor c1 is select r.reg_status,sch.course_id 
+   from registration r,student s,schedule sch
+   where r.student_id=s.student_id and
+   sch.course_id=r.course_id and sch.schedule_id=scheduleid and s.student_id=studentid;
+
+V_check_reg int;
+v_status int;
+C_waitlist int;
+Sec_size int;
+sec_cap int;
+cour_id int;
+min_wait int;
+wl_pos int;
+begin
+   open c1;
+   loop
+   fetch c1 into v_status,cour_id;
+   exit when c1%notfound;
+---checking whether the student has registered for the course or not.
+   if v_status!=0 and v_status!=1 then
+   dbms_output.put_line('the student is not registered with that course');
+---cheching if he is on waitlist.
+   elsif v_status=0 then
+   select waitlist_position into wl_pos from waitlist where student_id=studentid and schedule_id=scheduleid;
+   delete from waitlist where student_id=studentid and schedule_id=scheduleid;
+   update registration 
+   set reg_status=2
+   where student_id=studentid and course_id=(select course_id from schedule where schedule_id=scheduleid);
+   update waitlist
+   set waitlist_position=waitlist_position-1
+   where waitlist_Position >wl_pos
+   and schedule_id=scheduleid;
+---cheching if the student is enrolled or not.
+   elsif v_status=1 then
+   select student_id into min_wait from waitlist where schedule_id=scheduleid and 
+   waitlist_position =(select min(waitlist_position)from waitlist where schedule_id=scheduleid);
+   delete from waitlist
+   where student_id=min_wait and schedule_id=scheduleid;
+   update registration 
+   set reg_status=1
+   where student_id=min_wait and course_id=(select course_id from schedule where schedule_id=scheduleid);
+   update waitlist
+   set waitlist_position=waitlist_position-1
+   where waitlist_Position >=(select min(waitlist_position)from waitlist where schedule_id=scheduleid)
+   and schedule_id=scheduleid;
+   
+end if;
+end loop;
+close c1;
+select count(*) into C_waitlist from
+waitlist w,schedule sch
+where sch.schedule_id=scheduleid and w.schedule_id= sch.schedule_id ;
+--checking if the section reaches section capacity.
+if C_waitlist=0 then
+select section_size into sec_size from section Sec, schedule sch
+where sec.sec_id=sch.sec_id and sch.schedule_id=scheduleid;
+select sch.sec_capacity into sec_cap from  section Sec,schedule sch
+where sec.sec_id=sch.sec_id and sch.schedule_id=scheduleid;
+---check section capacity and set the status to open if capacity is not reached.
+if sec_size<sec_cap then
+update section 
+set status=1
+where sec_id=(select sec_id from schedule where schedule_id=scheduleid);
+end if;
+end if;
+exception
+	when no_data_found then
+	dbms_output.put_line('please provide valid ids');
+	
+	when too_many_rows then
+	dbms_output.put_line('more than one employee with the name, return the first one');
+end;
+ 
+/
+--not enrolled
+exec drop_student(7,6001);
+
+
+-waitlist 
+exec drop_student(3,6001);
+
+insert into registration values (4, 121, 5001, null, 0);
+--waitlist moving up
+exec drop_student(4,6001);
+
+exec drop_student(7,6008);
+/
+
+--Feature 14
+
+set SERVEROUTPUT ON;
+Create or replace procedure print_course_schedule(studentid in int,year_in in int,semester_in in varchar)
+Is
+cursor c1 is select c.course_id,c.course_name,sec.sec_id,r.reg_status,w.waitlist_position
+from course C,section Sec,registration r, waitlist w
+where c.course_id=sec.course_id and
+sec.course_id=r.course_id 
+and r.student_id=studentid and
+sec.year=year_in and
+sec.sem=semester_in and
+w.student_id=r.student_id;
+Courseid number;
+coursename course.course_name%type;
+section_id number;
+status_sec number;
+w_position number;
+begin 
+
+  open c1;
+  loop
+    fetch c1 into Courseid,coursename,section_id,status_sec,w_position;
+    exit when c1%notfound;
+    if status_sec!=0 then
+    dbms_output.put_line('course is'||courseid||'course name is'||coursename||'section is'||section_id||
+    'status is'||status_sec);
+    else
+    dbms_output.put_line('course is'||courseid||'course name is'||coursename||'section is'||section_id||
+    'status is'||status_sec||'waitlist position is'||w_position);
+    end if;
+    end loop;
+    close c1;
+
+
+exception
+	when no_data_found then
+	dbms_output.put_line('please provide valid ids');
+	
+	when too_many_rows then
+	dbms_output.put_line('more than one employee with the name, return the first one');
+   
+end;
+/
+exec print_course_schedule(1,2019,'Fall');
+
+--Feature 16
+
+SET SERVEROUTPUT ON;
+create or replace procedure top_results(yr in number, sem in varchar, k in number) IS
+c_id course.course_id%type;
+c_name course.course_name%type;
+w_position waitlist.waitlist_position%type;
+num_schedules number;
+r_id class_room.class_room_id%type;
+r_name class_room.room_name%type;
+t_id time_block.time_block_id%type;
+s_time time_block.start_time%type;
+t_day time_block.time_day%type;
+total_day time_block.time_day%type;
+
+--top k courses with long waitlist (send paramter k)
+Cursor c1(n number) is select * from ( select c.COURSE_NAME, c.COURSE_ID, w.WAITLIST_POSITION from WAITLIST w, SCHEDULE s, COURSE c where s.YEAR_SCHEDULE = yr and SCHEDULE_SEM = sem
+and w.SCHEDULE_ID = s.SCHEDULE_ID and s.COURSE_ID = c.COURSE_ID order by n desc) waiting_list where rownum <= n order by rownum;
+
+--top k rooms with few schedules (send paramter k)
+Cursor c2(n number) is select * from ( select r.CLASS_ROOM_ID, r.ROOM_NAME, count (*) from SECTION s, SCHEDULE sch , CLASS_ROOM r where s.SEC_ID = sch.SEC_ID
+and r.CLASS_ROOM_ID = sch.CLASS_ROOM_ID and sch.YEAR_SCHEDULE = yr and sch.SCHEDULE_SEM = sem group by r.CLASS_ROOM_ID, r.ROOM_NAME order by n asc) class_room
+where rownum <= n order by rownum;
+
+-- top k time blocks woth few schedule (send paramter k)
+Cursor c3(n number) is select * from ( select tb.TIME_BLOCK_ID, tb.START_TIME, tb.TIME_DAY, count(*) from TIME_BLOCK tb, SECTION s, SCHEDULE sch , CLASS_ROOM r
+where tb.TIME_BLOCK_ID = sch.TIME_BLOCK_ID and s.SEC_ID = sch.SEC_ID and r.CLASS_ROOM_ID = sch.CLASS_ROOM_ID and sch.YEAR_SCHEDULE = yr and sch.SCHEDULE_SEM = sem
+group by tb.TIME_BLOCK_ID, tb.START_TIME, tb.TIME_DAY order by n asc) time_block where rownum <=n order by rownum;
+
+Begin
+open c1(k);
+loop
+  fetch c1 into c_name, c_id, w_position;
+  exit when c1%NOTFOUND;
+  dbms_output.put_line('Course Name: '|| c_name ||' Course ID: '|| c_id || ' Waitlist Length: '|| w_position);
+END LOOP;
+close c1;
+dbms_output.put_line('');
+open c2(k);
+loop
+  fetch c2 into r_id, r_name, num_schedules;
+  exit when c2%NOTFOUND;
+  dbms_output.put_line('Room Name: '|| r_name ||' Room ID: '|| r_id || ' No. of scheduled classes : '|| num_schedules);
+END LOOP;
+close c2;
+dbms_output.put_line('');
+open c3(k);
+loop
+  fetch c3 into t_id, s_time,t_day, total_day;
+  exit when c3%NOTFOUND;
+  dbms_output.put_line('Time ID: '|| t_id ||' Start time : '|| s_time || ' Day : '|| total_day);
+END LOOP;
+close c3;
+
+Exception
+when no_data_found then
+ dbms_output.put_line('No data found');
+
+end top_results;
+
+/
+
+exec top_results(2019, 'Fall', 4);
+exec top_results(2019, 'Fall', 3);
+
+--Feature 16
+
+SET SERVEROUTPUT ON;
+create or replace procedure top_results(yr in number, sem in varchar, k in number) IS
+c_id course.course_id%type;
+c_name course.course_name%type;
+w_position waitlist.waitlist_position%type;
+num_schedules number;
+r_id class_room.class_room_id%type;
+r_name class_room.room_name%type;
+t_id time_block.time_block_id%type;
+s_time time_block.start_time%type;
+t_day time_block.time_day%type;
+total_day time_block.time_day%type;
+
+--top k courses with long waitlist (send paramter k)
+Cursor c1(n number) is select * from ( select c.COURSE_NAME, c.COURSE_ID, w.WAITLIST_POSITION from WAITLIST w, SCHEDULE s, COURSE c where s.YEAR_SCHEDULE = yr and SCHEDULE_SEM = sem
+and w.SCHEDULE_ID = s.SCHEDULE_ID and s.COURSE_ID = c.COURSE_ID order by n desc) waiting_list where rownum <= n order by rownum;
+
+--top k rooms with few schedules (send paramter k)
+Cursor c2(n number) is select * from ( select r.CLASS_ROOM_ID, r.ROOM_NAME, count (*) from SECTION s, SCHEDULE sch , CLASS_ROOM r where s.SEC_ID = sch.SEC_ID
+and r.CLASS_ROOM_ID = sch.CLASS_ROOM_ID and sch.YEAR_SCHEDULE = yr and sch.SCHEDULE_SEM = sem group by r.CLASS_ROOM_ID, r.ROOM_NAME order by n asc) class_room
+where rownum <= n order by rownum;
+
+-- top k time blocks woth few schedule (send paramter k)
+Cursor c3(n number) is select * from ( select tb.TIME_BLOCK_ID, tb.START_TIME, tb.TIME_DAY, count(*) from TIME_BLOCK tb, SECTION s, SCHEDULE sch , CLASS_ROOM r
+where tb.TIME_BLOCK_ID = sch.TIME_BLOCK_ID and s.SEC_ID = sch.SEC_ID and r.CLASS_ROOM_ID = sch.CLASS_ROOM_ID and sch.YEAR_SCHEDULE = yr and sch.SCHEDULE_SEM = sem
+group by tb.TIME_BLOCK_ID, tb.START_TIME, tb.TIME_DAY order by n asc) time_block where rownum <=n order by rownum;
+
+Begin
+open c1(k);
+loop
+  fetch c1 into c_name, c_id, w_position;
+  exit when c1%NOTFOUND;
+  dbms_output.put_line('Course Name: '|| c_name ||' Course ID: '|| c_id || ' Waitlist Length: '|| w_position);
+END LOOP;
+close c1;
+dbms_output.put_line('');
+open c2(k);
+loop
+  fetch c2 into r_id, r_name, num_schedules;
+  exit when c2%NOTFOUND;
+  dbms_output.put_line('Room Name: '|| r_name ||' Room ID: '|| r_id || ' No. of scheduled classes : '|| num_schedules);
+END LOOP;
+close c2;
+dbms_output.put_line('');
+open c3(k);
+loop
+  fetch c3 into t_id, s_time,t_day, total_day;
+  exit when c3%NOTFOUND;
+  dbms_output.put_line('Time ID: '|| t_id ||' Start time : '|| s_time || ' Day : '|| total_day);
+END LOOP;
+close c3;
+
+Exception
+when no_data_found then
+ dbms_output.put_line('No data found');
+
+end top_results;
+
+/
+
+exec top_results(2019, 'Fall', 4);
+exec top_results(2019, 'Fall', 3);
+
+
+
+
